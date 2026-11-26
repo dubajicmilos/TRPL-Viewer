@@ -41,6 +41,15 @@ def _write_test_files(folder):
             camera = cube.create_group("Info/Camera")
             camera.attrs["Model"] = np.array([b"Synthetic"])
             camera.create_group("XAxis").attrs["Coefs"] = np.array([0, 0.5])
+    snapshot = folder / "snapshot.h5"                 # Photon etc. broadband image: one frame, no /Cube/Wavelength
+    with h5py.File(snapshot, "w") as h5:
+        cube = h5.create_group("Cube")
+        cube["Images"] = image[None]
+        camera = cube.create_group("Info/Camera")
+        camera.attrs["Model"] = np.array([b"Synthetic"])
+        camera.create_group("XAxis").attrs["Coefs"] = np.array([0, 0.5])
+        cube.create_group("Info/Cube").attrs["BroadBand"] = np.array([1], dtype=np.int32)
+    cubes.append(snapshot)
     return decay, cube4d, cubes
 
 

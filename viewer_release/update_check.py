@@ -15,7 +15,7 @@ except ModuleNotFoundError as exc:
         raise
     __version__ = '0.0.0'
 
-REPOSITORY = 'dubajicmilos/TRPL-Viewer'
+REPOSITORY = 'dubajicmilos/Hyperspectral-Viewer'
 LATEST_RELEASE = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
 VERSION_RE = re.compile(r'v?([0-9]{1,9})\.([0-9]{1,9})\.([0-9]{1,9})')
 

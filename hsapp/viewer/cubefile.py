@@ -8,6 +8,8 @@ Dataset layout:
     /Cube/Timestamp (n,) S23 (raw)              /Cube/Angle (n,) (raw cubes only)
     /Cube/Info/Camera/XAxis@Coefs = [0, um per pixel]   /Cube/Info/Optics@Objective   /Cube/Info/Camera@Model, PixelSizeNm
     /Cube/Info/Cube@PixelUnit (photometric cubes)       /Cube/Info/Processings/NNN (Name, Unit, ...)
+    Photon etc. IMA single-image files (broadband / camera-preview snapshots, `/Cube/Info/Cube@BroadBand = 1`) hold ONE
+    frame and no /Cube/Wavelength: `is_image` is True and `wavelengths` is [NaN] (there is no spectral axis to plot).
     time-series files (`hyperspec_acq.py timeseries`) have NO /Cube group: the frames are in /Acq/TimeSeries/Images
     (same companion datasets); CubeFile then shows those (`source_group == 'Acq/TimeSeries'`).
 
@@ -130,7 +132,8 @@ class CubeFile:
     """One cube file.  Metadata is read in the constructor; pixel data stays on disk until `load_all()`.
 
     Public attributes: path, name, kind, stage, corrections, wavelengths (n,), grating_ids (n,), exposure (n,),
-    objective, pixel_size_um (+ pixel_size_calibrated), units, info (flat 'Group/Sub/key' -> value, decoded),
+    is_image (one frame, no wavelength axis), objective, pixel_size_um (+ pixel_size_calibrated), units,
+    info (flat 'Group/Sub/key' -> value, decoded),
     shape (n, h, w), dtype, is_emiccd, timeseries (/Acq/TimeSeries present), source_group, timestamps (list of str or
     None), offset (subtracted from every returned value, default 0.0).
 
@@ -168,7 +171,12 @@ class CubeFile:
         self.compression = ds.compression
         n = self.shape[0]
         g = f[group]
-        self.wavelengths = g['Wavelength'][()].astype(float) if 'Wavelength' in g else np.arange(n, dtype=float)
+        broadband = _decode(f[group + '/Info/Cube'].attrs.get('BroadBand', 0)) if group + '/Info/Cube' in f else 0
+        self.is_image = n == 1 and ('Wavelength' not in g or bool(broadband))
+        if 'Wavelength' in g:
+            self.wavelengths = g['Wavelength'][()].astype(float)
+        else:                                         # no spectral axis: NaN for a single image, frame number otherwise
+            self.wavelengths = np.full(n, np.nan) if self.is_image else np.arange(n, dtype=float)
         self.grating_ids = g['GratingID'][()].astype(int) if 'GratingID' in g else np.zeros(n, int)
         self.exposure = g['TimeExposure'][()].astype(float) if 'TimeExposure' in g else np.full(n, np.nan)
         for name in ('Wavelength', 'GratingID', 'TimeExposure'):
@@ -269,6 +277,8 @@ class CubeFile:
 
     def frame_label(self, i):
         """'λ = 520.0 nm (G0)' (raw cubes: filter wavelength); time series add the time stamp."""
+        if self.is_image:
+            return 'single image'
         text = '\u03bb = %.1f nm (G%d)' % (self.wavelengths[i], self.grating_ids[i])
         if self.timestamps is not None and self.source_group != 'Cube':
             text += '  ' + self.timestamps[i]
@@ -276,6 +286,8 @@ class CubeFile:
 
     def default_rgb_bands(self):
         """[(lo, hi)] for R, G, B: the cube's wavelength range in thirds (longest third = red)."""
+        if self.is_image:
+            return [(0.0, 1.0)] * 3                   # any band selects the one image
         lo, hi = float(np.nanmin(self.wavelengths)), float(np.nanmax(self.wavelengths))
         t = (hi - lo) / 3.0
         return [(lo + 2 * t, hi), (lo + t, lo + 2 * t), (lo, lo + t)]
@@ -462,7 +474,8 @@ class CubeFile:
             'frames': self.n_frames, 'image (h x w)': '%d x %d' % self.shape[1:], 'dtype': str(self.dtype),
             'compression': self.compression or 'none', 'size on disk (MB)': round(size / 2 ** 20, 1),
             'source group': self.source_group, 'units': self.units,
-            'wavelength range (nm)': '%.1f - %.1f' % (np.nanmin(self.wavelengths), np.nanmax(self.wavelengths)),
+            'wavelength range (nm)': ('none (single image)' if self.is_image
+                                      else '%.1f - %.1f' % (np.nanmin(self.wavelengths), np.nanmax(self.wavelengths))),
             'pixel size (um)': ('%.4g' % self.pixel_size_um) + ('' if self.pixel_size_calibrated else ' (UNCALIBRATED)'),
             'detector': 'emICCD' if self.is_emiccd else 'sCMOS',
             'time series present': self.timeseries,

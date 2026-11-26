@@ -513,6 +513,7 @@ class OverlayViewer(QtWidgets.QMainWindow):
         if self.offset_check.isChecked():
             cf.offset = cf.offset_guess()
         first = not self.entries
+        first_spectral = not cf.is_image and all(x.cf.is_image for x in self.entries)
         self.entries.append(e)
         if first:
             self.ref_uid = e.uid
@@ -522,6 +523,8 @@ class OverlayViewer(QtWidgets.QMainWindow):
         if first:
             self._init_ranges()
             self.fit_view()
+        elif first_spectral:                      # only single images so far: the wavelength controls had no range yet
+            self._init_ranges()
         else:
             self._extend_ranges()
         self._update_warnings()
@@ -590,7 +593,8 @@ class OverlayViewer(QtWidgets.QMainWindow):
                 dt = (e.t0 - t_first).total_seconds() / 60.0 if t_first is not None else 0.0
                 tm = QtWidgets.QTableWidgetItem('%s  (+%.1f min)' % (e.t0.strftime('%H:%M:%S'), dt))
                 tm.setToolTip('from ' + e.t_src)
-                wl = QtWidgets.QTableWidgetItem('%.0f\u2013%.0f /%d' % (np.nanmin(cf.wavelengths), np.nanmax(cf.wavelengths),
+                wl = QtWidgets.QTableWidgetItem('single image' if cf.is_image else
+                                                '%.0f\u2013%.0f /%d' % (np.nanmin(cf.wavelengths), np.nanmax(cf.wavelengths),
                                                                         cf.shape[0]))
                 un = QtWidgets.QTableWidgetItem(cf.units)
                 ga = QtWidgets.QTableWidgetItem('%g\u00d7%g' % (e.gain, e.acc) if e.gain else '\u2013')
@@ -770,17 +774,28 @@ class OverlayViewer(QtWidgets.QMainWindow):
         self.schedule_spectra()
 
     # ================================================================================================== wavelength controls
+    def _spectral(self):
+        """Entries with a wavelength axis (single images have none)."""
+        return [e for e in self.entries if not e.cf.is_image]
+
     def _union_range(self):
-        lo = min(float(np.nanmin(e.cf.wavelengths)) for e in self.entries)
-        hi = max(float(np.nanmax(e.cf.wavelengths)) for e in self.entries)
+        spec = self._spectral()
+        if not spec:
+            return 0.0, 0.0
+        lo = min(float(np.nanmin(e.cf.wavelengths)) for e in spec)
+        hi = max(float(np.nanmax(e.cf.wavelengths)) for e in spec)
         return lo, hi
 
     def _init_ranges(self):
         lo, hi = self._union_range()
-        ref = self.reference
-        fs = ref.cf.full_spectrum()
-        wl = float(ref.cf.wavelengths[int(np.nanargmax(fs))]) if np.isfinite(fs).any() else 0.5 * (lo + hi)
-        step = float(np.median(np.abs(np.diff(np.unique(ref.cf.wavelengths))))) if ref.cf.shape[0] > 1 else 1.0
+        spec = self._spectral()
+        ref = self.reference if self.reference in spec else (spec[0] if spec else None)
+        if ref is None:                           # only single images: no wavelength to choose
+            wl, step = lo, 1.0
+        else:
+            fs = ref.cf.full_spectrum()
+            wl = float(ref.cf.wavelengths[int(np.nanargmax(fs))]) if np.isfinite(fs).any() else 0.5 * (lo + hi)
+            step = float(np.median(np.abs(np.diff(np.unique(ref.cf.wavelengths))))) if ref.cf.shape[0] > 1 else 1.0
         self._guard = True
         try:
             for sp in (self.wl_spin, self.lo_spin, self.hi_spin):
@@ -1119,6 +1134,8 @@ class OverlayViewer(QtWidgets.QMainWindow):
         b = int(self.bin_combo.currentData() or 1)
         probes = self._probes()
         for e in self.shown():
+            if e.cf.is_image:                       # no spectral axis: nothing to plot
+                continue
             for label, probe in probes:
                 y = OC.probe_spectrum(e.cf, probe, e.shift, b)
                 out.append((e, label, np.asarray(e.cf.wavelengths, float), y))

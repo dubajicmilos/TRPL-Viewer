@@ -39,9 +39,11 @@ class Cube:
         self.name = os.path.basename(path)
         with h5py.File(path, 'r') as f:
             c = f['Cube']
-            self.wl = c['Wavelength'][()].astype(float)
-            self.gid = c['GratingID'][()] if 'GratingID' in c else np.zeros(len(self.wl), int)
             raw = c['Images']
+            # Photon etc. single images (e.g. *_Broadband.h5) hold one frame and no /Cube/Wavelength
+            self.is_image = raw.shape[0] == 1 and 'Wavelength' not in c
+            self.wl = c['Wavelength'][()].astype(float) if 'Wavelength' in c else np.full(raw.shape[0], np.nan)
+            self.gid = c['GratingID'][()] if 'GratingID' in c else np.zeros(len(self.wl), int)
             self.integer = raw.dtype.kind in 'ui'
             cam = c['Info/Camera'].attrs
             model = cam.get('Model', [b'?'])[0]
@@ -147,6 +149,11 @@ def normalise(wl, s, mode):
     return s / d if d and np.isfinite(d) else s
 
 
+def frame_index(c, wl):
+    """Frame of cube c nearest to wavelength wl; a single image is its own frame at every wavelength."""
+    return 0 if c.is_image else int(np.argmin(np.abs(c.wl - wl)))
+
+
 def pct_limits(img):
     v = img[np.isfinite(img)]
     v = v[v > 0] if (v > 0).sum() > 100 else v
@@ -176,11 +183,12 @@ class Viewer:
         half = max(n, 2) // 2 if max(n, 2) > 2 else 1
         self.ax_spec = self.fig.add_subplot(gs[1, :half])
         self.ax_ratio = self.fig.add_subplot(gs[1, half:])
-        self.wl = cubes[0].wl
+        self.spec_cubes = [c for c in cubes if not c.is_image]      # single images have no spectrum
+        self.wl = self.spec_cubes[0].wl if self.spec_cubes else np.zeros(1)
         self.k = int(np.argmin(np.abs(self.wl - wl0)))
         self.ims, self.rects = [], []
         for ax, c in zip(self.ax_img, cubes):
-            j = int(np.argmin(np.abs(c.wl - self.wl[self.k])))
+            j = frame_index(c, self.wl[self.k])
             img = c.data[j]
             lo, hi = pct_limits(img)
             im = ax.imshow(img, cmap='inferno', origin='upper', extent=c.extent(), vmin=lo, vmax=hi, interpolation='nearest')
@@ -188,10 +196,12 @@ class Viewer:
             cb.ax.tick_params(labelsize=7)
             ax.set_xlabel('x (um)'); ax.set_ylabel('y (um)')
             self.ims.append(im)
-        ax_sl = self.fig.add_axes([0.10, 0.035, 0.62, 0.025])
-        self.slider = Slider(ax_sl, 'wavelength', float(self.wl[0]), float(self.wl[-1]), valinit=float(self.wl[self.k]),
-                             valstep=np.asarray(self.wl, float))
-        self.slider.on_changed(self._on_slider)
+        self.slider = None
+        if self.spec_cubes and len(self.wl) > 1:
+            ax_sl = self.fig.add_axes([0.10, 0.035, 0.62, 0.025])
+            self.slider = Slider(ax_sl, 'wavelength', float(self.wl[0]), float(self.wl[-1]), valinit=float(self.wl[self.k]),
+                                 valstep=np.asarray(self.wl, float))
+            self.slider.on_changed(self._on_slider)
         ax_rb = self.fig.add_axes([0.88, 0.14, 0.11, 0.14])
         ax_rb.set_title('normalise', fontsize=9)
         self.radio = RadioButtons(ax_rb, ('band', 'peak', 'none'), active=('band', 'peak', 'none').index(norm))
@@ -213,7 +223,7 @@ class Viewer:
         self._update_spectra(); self.fig.canvas.draw_idle()
 
     def _on_key(self, ev):
-        if ev.key in ('left', 'right'):
+        if ev.key in ('left', 'right') and self.slider is not None:
             self.k = int(np.clip(self.k + (1 if ev.key == 'right' else -1), 0, len(self.wl) - 1))
             self.slider.set_val(float(self.wl[self.k]))
 
@@ -226,12 +236,13 @@ class Viewer:
     # ---------------------------------------------------------------- drawing
     def _update_images(self):
         for ax, im, c in zip(self.ax_img, self.ims, self.cubes):
-            j = int(np.argmin(np.abs(c.wl - self.wl[self.k])))
+            j = frame_index(c, self.wl[self.k])
             img = c.data[j]
             im.set_data(img)
             lo, hi = pct_limits(img)
             im.set_clim(lo, hi)
-            ax.set_title(f'{c.name}\n{c.model} | {c.wl[j]:.0f} nm, G{int(c.gid[j])}', fontsize=9)
+            what = 'single image' if c.is_image else f'{c.wl[j]:.0f} nm, G{int(c.gid[j])}'
+            ax.set_title(f'{c.name}\n{c.model} | {what}', fontsize=9)
 
     def _update_markers(self):
         for ln in getattr(self, '_wl_lines', []):
@@ -250,14 +261,15 @@ class Viewer:
         a, b = self.ax_spec, self.ax_ratio
         a.clear(); b.clear()
         spectra = []
-        for c, col in zip(self.cubes, self.colors):
+        spec = [(c, col) for c, col in zip(self.cubes, self.colors) if not c.is_image]
+        for c, col in spec:
             s = normalise(c.wl, c.roi_spectrum(self.roi), self.norm)
             spectra.append(s)
             for g in np.unique(c.gid):                         # separate lines per grating (no line across 600 nm)
                 m = c.gid == g
                 a.plot(c.wl[m], s[m], '-', color=col, lw=1.6, label=f'{c.name}' if g == np.unique(c.gid)[0] else None)
-        ref = self.cubes[0]
-        for c, s, col in zip(self.cubes[1:], spectra[1:], self.colors[1:]):
+        ref = spec[0][0] if spec else None
+        for (c, col), s in zip(spec[1:], spectra[1:]):
             si = np.interp(ref.wl, c.wl, s) if not np.array_equal(c.wl, ref.wl) else s
             with np.errstate(all='ignore'):
                 r = si / spectra[0]
@@ -272,10 +284,13 @@ class Viewer:
         where = 'whole common field' if self.roi is None else f'ROI {self.roi[2]:.0f} um at (x={self.roi[1]:.1f}, y={self.roi[0]:.1f}) um'
         a.set_title(f'spectra, {where}; normalise: {self.norm}', fontsize=9)
         a.set_ylabel('signal (normalised)' if self.norm != 'none' else 'signal (each file in its own units)')
-        a.legend(fontsize=8)
-        b.set_title('ratio to the first cube (shape comparison)', fontsize=9)
+        if spec:
+            a.legend(fontsize=8)
+        else:
+            a.text(0.5, 0.5, 'single images only: no spectra', transform=a.transAxes, ha='center', va='center')
+        b.set_title('ratio to the first cube with a spectrum (shape comparison)', fontsize=9)
         b.set_ylabel('ratio')
-        if len(self.cubes) > 1:
+        if len(spec) > 1:
             b.legend(fontsize=8)
 
     def show(self):
@@ -311,7 +326,8 @@ def main(argv=None):
     for i, p in enumerate(a.cubes):
         print(f'loading {p} ...', flush=True)
         c = Cube(p, offsets.get(i))
-        print(f'  {c.model}: {c.data.shape[0]} wavelengths {c.wl[0]:.0f}-{c.wl[-1]:.0f} nm, {c.nx}x{c.ny} px at {c.px_um:.4f} um/px'
+        spectral = 'single image' if c.is_image else f'{c.data.shape[0]} wavelengths {c.wl[0]:.0f}-{c.wl[-1]:.0f} nm'
+        print(f'  {c.model}: {spectral}, {c.nx}x{c.ny} px at {c.px_um:.4f} um/px'
               + (f', integer cube: offset {c.offset} subtracted' if c.integer else ''))
         cubes.append(c)
     if len(cubes) > 1 and not a.no_align:

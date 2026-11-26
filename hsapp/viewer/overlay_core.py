@@ -304,7 +304,10 @@ def plot_connect(x, y):
 
 # ---------------------------------------------------------------------------------------------------------------- images
 def frame_for_wavelength(cf, wl):
-    """Index of the frame nearest to `wl`, None when `wl` lies outside the cube's range by more than one frame step."""
+    """Index of the frame nearest to `wl`, None when `wl` lies outside the cube's range by more than one frame step.
+    A single image (no wavelength axis) is its own frame at every wavelength."""
+    if cf.is_image:
+        return 0
     w = np.asarray(cf.wavelengths, float)
     lo, hi = float(np.nanmin(w)), float(np.nanmax(w))
     step = float(np.median(np.abs(np.diff(np.unique(w))))) if len(np.unique(w)) > 1 else 1.0
@@ -320,6 +323,8 @@ def cube_image(cf, mode, wl=None, band=None):
         i = frame_for_wavelength(cf, wl)
         return None if i is None else cf.frame(i)
     if mode == 'band':
+        if cf.is_image:
+            return cf.frame(0)
         lo, hi = min(band), max(band)
         w = np.asarray(cf.wavelengths, float)
         if not ((w >= lo) & (w <= hi)).any():
