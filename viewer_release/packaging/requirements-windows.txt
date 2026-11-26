@@ -1,0 +1,9 @@
+# Use a fresh 64-bit CPython 3.11 environment for Windows releases.
+numpy==2.1.1
+scipy==1.14.1
+h5py==3.11.0
+matplotlib==3.9.2
+scikit-image==0.25.2
+PySide6-Essentials==6.7.2
+pyqtgraph==0.14.0
+PyInstaller==6.22.3
