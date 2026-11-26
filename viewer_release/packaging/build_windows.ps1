@@ -148,5 +148,16 @@ try {
     if ((Split-Path -Parent $resolvedBuild) -ne $tempRoot -or (Split-Path -Leaf $resolvedBuild) -notmatch '^trpl-viewer-build-[a-f0-9]{32}$') {
         throw "Refusing to remove unexpected build directory $resolvedBuild"
     }
-    Remove-Item -LiteralPath $resolvedBuild -Recurse -Force
+    # Inno Setup can still be removing its own temporary files after the uninstaller exits.
+    for ($attempt = 1; $attempt -le 4 -and (Test-Path -LiteralPath $resolvedBuild); $attempt++) {
+        try {
+            Remove-Item -LiteralPath $resolvedBuild -Recurse -Force -ErrorAction Stop
+        } catch {
+            if ($attempt -lt 4) {
+                Start-Sleep -Milliseconds 500
+            } elseif (Test-Path -LiteralPath $resolvedBuild) {
+                Write-Warning "Could not remove the temporary viewer build at $resolvedBuild. $($_.Exception.Message)"
+            }
+        }
+    }
 }
