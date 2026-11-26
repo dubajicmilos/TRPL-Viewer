@@ -1,6 +1,6 @@
 # TRPL Viewer
 
-Open and inspect existing time-resolved photoluminescence and hyperspectral HDF5 files on Windows.
+Open and inspect existing time-resolved photoluminescence and hyperspectral HDF5 files on Windows. The viewers read measurement files and save exports such as CSV curves, plots, and regions separately.
 
 ## Install and update
 
