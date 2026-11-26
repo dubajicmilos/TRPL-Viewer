@@ -12,7 +12,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $sourceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
-if (Test-Path -LiteralPath (Join-Path $sourceRoot 'hsapp/__main__.py')) {
+if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot '.viewer-export') -PathType Leaf) -or
+    (Test-Path -LiteralPath (Join-Path $sourceRoot 'hsapp/__main__.py'))) {
     throw 'Build from the exported viewer tree so acquisition code is outside the build environment.'
 }
 if ($BundleOnly -and $VerifyInstall) {
@@ -89,7 +90,7 @@ function Test-Viewer($Exe, $Marker) {
 
 New-Item -Path $OutputDir -ItemType Directory -Force | Out-Null
 $OutputDir = (Resolve-Path -LiteralPath $OutputDir).Path
-$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+$tempRoot = (Resolve-Path -LiteralPath ([IO.Path]::GetTempPath())).Path.TrimEnd('\')
 $buildDir = Join-Path $tempRoot ('trpl-viewer-build-' + [guid]::NewGuid().ToString('N'))
 New-Item -Path $buildDir -ItemType Directory | Out-Null
 $priorVersion = $env:TRPL_VIEWER_BUILD_VERSION
@@ -115,19 +116,28 @@ try {
         throw 'Installer output is missing.'
     }
     if ($VerifyInstall) {
-        $installDir = Join-Path $buildDir 'installed viewer'
-        $setupArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="{0}"' -f $installDir
-        try {
-            if ($PreviousInstaller) {
-                $baseline = (Resolve-Path -LiteralPath $PreviousInstaller).Path
-                Invoke-CheckedProcess $baseline $setupArgs $buildDir
-            }
-            Invoke-CheckedProcess $installer $setupArgs $buildDir
-            Test-Viewer (Join-Path $installDir 'TRPL-Viewer.exe') (Join-Path $buildDir 'installed.json')
-        } finally {
-            $uninstaller = Join-Path $installDir 'unins000.exe'
-            if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
-                Invoke-CheckedProcess $uninstaller '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' $buildDir
+        $modes = if ($PreviousInstaller) { @('fresh', 'upgraded') } else { @('fresh') }
+        foreach ($mode in $modes) {
+            $installDir = Join-Path $buildDir "$mode viewer"
+            $log = Join-Path $buildDir "$mode setup.log"
+            $setupArgs = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="{0}" /LOG="{1}"' -f $installDir, $log
+            try {
+                if ($mode -eq 'upgraded') {
+                    $baseline = (Resolve-Path -LiteralPath $PreviousInstaller).Path
+                    Invoke-CheckedProcess $baseline $setupArgs $buildDir
+                }
+                Invoke-CheckedProcess $installer $setupArgs $buildDir
+                Test-Viewer (Join-Path $installDir 'TRPL-Viewer.exe') (Join-Path $buildDir "$mode.json")
+            } catch {
+                if (Test-Path -LiteralPath $log -PathType Leaf) {
+                    Get-Content -LiteralPath $log -Tail 30 | Write-Host
+                }
+                throw
+            } finally {
+                $uninstaller = Join-Path $installDir 'unins000.exe'
+                if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
+                    Invoke-CheckedProcess $uninstaller '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' $buildDir
+                }
             }
         }
     }

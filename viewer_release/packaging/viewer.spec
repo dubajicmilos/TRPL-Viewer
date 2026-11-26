@@ -5,6 +5,8 @@ import sys
 from importlib import metadata
 from pathlib import Path
 
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 from PyInstaller.utils.hooks import collect_data_files
 
 root = Path(SPECPATH).resolve().parents[1]
@@ -21,6 +23,7 @@ notices = [
     "Upstream licence files supplied by the Python packages are in the adjoining directories.",
     "",
     "This application uses PySide6, Shiboken and Qt. Qt is supplied as replaceable DLLs.",
+    "The Qt/GPL and Qt/LGPL license texts accompany these notices.",
     "Qt licensing: https://doc.qt.io/qt-6/licensing.html",
     "Qt for Python source: https://code.qt.io/cgit/pyside/pyside-setup.git/",
     "Qt 6.7.2 source: https://download.qt.io/official_releases/qt/6.7/6.7.2/submodules/",
@@ -28,12 +31,21 @@ notices = [
     "Tcl/Tk licence: https://www.tcl-lang.org/software/tcltk/license.html",
     "",
 ]
-for name in (
+pending = [
     "numpy", "scipy", "h5py", "matplotlib", "scikit-image", "PySide6-Essentials", "shiboken6",
-    "pyqtgraph", "colorama", "contourpy", "cycler", "fonttools", "kiwisolver", "packaging", "pillow",
-    "pyparsing", "python-dateutil", "six", "networkx", "imageio", "tifffile", "lazy-loader", "PyInstaller",
-):
+    "pyqtgraph", "PyInstaller",
+]
+distributions = {}
+while pending:
+    name = canonicalize_name(pending.pop())
+    if name in distributions:
+        continue
     dist = metadata.distribution(name)
+    distributions[name] = dist
+    for requirement in (Requirement(value) for value in dist.requires or ()):
+        if requirement.marker is None or requirement.marker.evaluate():
+            pending.append(requirement.name)
+for name, dist in sorted(distributions.items()):
     notices.append(f"{name} {dist.version}: https://pypi.org/project/{name}/{dist.version}/")
     for path in dist.files or ():
         source = Path(dist.locate_file(path))
@@ -53,6 +65,8 @@ for name, path in (
 notice_file = generated / "NOTICE.txt"
 notice_file.write_text("\n".join(notices) + "\n", encoding="utf-8")
 data.append((str(notice_file), license_dir))
+for license_name in ("GPL-3.0.txt", "LGPL-3.0.txt"):
+    data.append((str(Path(SPECPATH) / "licenses" / license_name), f"{license_dir}/Qt"))
 data += collect_data_files("pyqtgraph", includes=["colors/maps/*.csv", "colors/maps/*.txt"])
 
 a = Analysis(
@@ -60,7 +74,7 @@ a = Analysis(
     pathex=[str(root)],
     datas=data,
     hiddenimports=["matplotlib.backends.backend_agg", "PySide6.QtSvg"],
-    excludes=["hsapp.__main__", "trpl_corrections", "PyQt5", "PyQt6", "PySide2"],
+    excludes=["hsapp.__main__", "trpl_corrections", "trpl_explorer_local", "PyQt5", "PyQt6", "PySide2"],
     hooksconfig={"matplotlib": {"backends": ["TkAgg"]}},
 )
 
